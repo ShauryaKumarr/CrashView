@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>CrashView</title>
+  <style>
+    body { background: #181c24; color: #c8f6f6; font-family: 'Segoe UI', sans-serif; }
+    .container { display: flex; gap: 2rem; margin: 2rem; }
+    .panel { background: #23283b; border-radius: 16px; padding: 2rem; min-width: 300px; }
+    .panel h3 { color: #6fffe9; margin-bottom: 1rem; }
+    .data-row { display: flex; justify-content: space-between; margin-bottom: 1rem; }
+    .label { font-weight: 500; }
+    .value { background: #222; border-radius: 8px; padding: 0.3rem 1rem; color: #6fffe9; }
+    .status { margin-top: 1rem; }
+    .big-title { font-size: 3rem; font-weight: bold; color: #6fffe9; text-align: center; margin-top: 2rem; margin-bottom: 2rem; letter-spacing: 2px; }
+  </style>
+</head>
+<body>
+  <div class="big-title">CrashView</div>
+  <div class="container">
+    <div class="panel">
+      <h3>Live Sensor Data</h3>
+      <div class="data-row"><span class="label">Acceleration X:</span> <span id="ax" class="value">---</span></div>
+      <div class="data-row"><span class="label">Acceleration Y:</span> <span id="ay" class="value">---</span></div>
+      <div class="data-row"><span class="label">Acceleration Z:</span> <span id="az" class="value">---</span></div>
+      <div class="data-row"><span class="label">Gyroscope X:</span> <span id="gx" class="value">---</span></div>
+      <div class="data-row"><span class="label">Gyroscope Y:</span> <span id="gy" class="value">---</span></div>
+      <div class="data-row"><span class="label">Gyroscope Z:</span> <span id="gz" class="value">---</span></div>
+      <div class="status" id="status">Waiting for Arduino connection...</div>
+    </div>
+    <div class="panel">
+      <h3>Event Log</h3>
+      <pre id="log" style="color:#fff; background:#222; border-radius:8px; padding:1rem; height:300px; overflow:auto;"></pre>
+    </div>
+  </div>
+  <script>
+    const ax = document.getElementById('ax');
+    const ay = document.getElementById('ay');
+    const az = document.getElementById('az');
+    const gx = document.getElementById('gx');
+    const gy = document.getElementById('gy');
+    const gz = document.getElementById('gz');
+    const status = document.getElementById('status');
+    const log = document.getElementById('log');
+
+    status.textContent = "System initialized\nWaiting for Arduino connection...";
+
+    const logLines = [];
+    let lastUpdate = 0;
+
+    function isValidNumber(val) {
+      return !isNaN(parseFloat(val)) && isFinite(val);
+    }
+
+    const evtSource = new EventSource('/data');
+    evtSource.onmessage = function(e) {
+      // Keep only last 50 lines in log
+      logLines.push(e.data);
+      if (logLines.length > 50) logLines.shift();
+      log.textContent = logLines.join('\n');
+
+      console.log("Received data:", e.data); // Debug
+      
+      // Look for {ax:X,ay:Y,az:Z,gx:X,gy:Y,gz:Z} format
+      const jsonMatch = e.data.match(/\{[^}]+\}/);
+      if (jsonMatch) {
+        const jsonStr = jsonMatch[0];
+        console.log("Found JSON:", jsonStr); // Debug
+        
+        try {
+          // Convert to proper JSON by adding quotes around keys
+          const properJson = jsonStr.replace(/(\w+):/g, '"$1":');
+          const data = JSON.parse(properJson);
+          
+          ax.textContent = data.ax + " m/s²";
+          ay.textContent = data.ay + " m/s²";
+          az.textContent = data.az + " m/s²";
+          gx.textContent = data.gx + " °/s";
+          gy.textContent = data.gy + " °/s";
+          gz.textContent = data.gz + " °/s";
+          status.textContent = "Connected";
+        } catch (err) {
+          console.error("Parse error:", err); // Debug
+        }
+      }
+    };
+  </script>
+</body>
+</html>
