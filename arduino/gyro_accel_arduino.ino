@@ -76,17 +76,15 @@ void loop() {
   const float accel_sens = 0.061e-3 * 9.80665;
   const float gyro_sens  = 8.75e-3;
 
-  // Print
+  // Example: Only display ax, ay, az every second
   Serial.print("{");
-Serial.print("distance:"); Serial.print(distanceCm);
-Serial.print(",ax:");       Serial.print(ax_g);
-Serial.print(",ay:");       Serial.print(ay_g);
-Serial.print(",az:");       Serial.print(az_g);
-Serial.print(",gx:");       Serial.print(gx_d);
-Serial.print(",gy:");       Serial.print(gy_d);
-Serial.print(",gz:");       Serial.print(gz_d);
-Serial.println("}");
+  Serial.print("ax:"); Serial.print(ax * accel_sens, 2);
+  Serial.print(",ay:"); Serial.print(ay * accel_sens, 2);
+  Serial.print(",az:"); Serial.print(az * accel_sens, 2);
+  Serial.print(",gx:"); Serial.print(gx * gyro_sens, 2);
+  Serial.print(",gy:"); Serial.print(gy * gyro_sens, 2);
+  Serial.print(",gz:"); Serial.print(gz * gyro_sens, 2);
+  Serial.println("}");
 
-
-  delay(100);  // ~10 readings per second
+  delay(1000);  // 1 reading per second
 }
