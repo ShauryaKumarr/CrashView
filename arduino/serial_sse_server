@@ -1,0 +1,172 @@
+from flask import Flask, Response, render_template_string
+import serial
+import threading
+import time
+
+app = Flask(__name__)
+
+SERIAL_PORT = '/dev/tty.usbmodem11401'
+BAUDRATE = 115200
+
+# Shared variable for latest line read from serial
+latest_line = ""
+
+def read_serial():
+    global latest_line
+    try:
+        ser = serial.Serial(SERIAL_PORT, BAUDRATE, timeout=1)
+        while True:
+            line = ser.readline().decode('utf-8', errors='replace').strip()
+            if line:
+                latest_line = line
+    except Exception as e:
+        print("Serial error:", e)
+
+@app.route('/')
+def index():
+    # Simple webpage showing live serial data via SSE
+    return render_template_string('''
+        <!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>CrashView - Live Serial Data (SSE)</title>
+<style>
+  body {
+    background: #121212;
+    color: #ddd;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    margin: 0; padding: 1rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+  h1 {
+    font-weight: 900;
+    font-size: 3rem;
+    color: #e94e77;
+    margin-bottom: 0.5rem;
+    user-select: none;
+  }
+  #container {
+    display: flex;
+    gap: 2rem;
+    width: 90vw;
+    max-width: 900px;
+  }
+  #log {
+    flex: 1;
+    background: #222;
+    border-radius: 8px;
+    padding: 1rem;
+    height: 300px;
+    overflow-y: auto;
+    font-family: monospace;
+    font-size: 1.1rem;
+    line-height: 1.3;
+    box-shadow: 0 0 10px #e94e77aa;
+  }
+  #log .line {
+    margin-bottom: 0.3rem;
+    white-space: pre-wrap;
+  }
+  .panel {
+    width: 250px;
+    background: #222;
+    border-radius: 8px;
+    padding: 1rem;
+    box-shadow: 0 0 10px #e94e77aa;
+  }
+  .panel h2 {
+    margin-top: 0;
+    color: #f48fb1;
+    font-weight: 700;
+    font-size: 1.4rem;
+    user-select: none;
+  }
+  .values {
+    font-family: monospace;
+    font-size: 1.2rem;
+    margin-top: 1rem;
+    white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+  <h1>CrashView</h1>
+  <div id="container">
+    <div id="log"></div>
+    <div class="panel">
+      <h2>Accelerometer (m/s²)</h2>
+      <div id="accel-values" class="values">Waiting for data...</div>
+    </div>
+    <div class="panel">
+      <h2>Gyroscope (dps)</h2>
+      <div id="gyro-values" class="values">Waiting for data...</div>
+    </div>
+  </div>
+
+<script>
+  const logDiv = document.getElementById('log');
+  const accelDiv = document.getElementById('accel-values');
+  const gyroDiv = document.getElementById('gyro-values');
+
+  const maxLines = 20;
+  const lines = [];
+
+  const evtSource = new EventSource('/stream');
+
+  evtSource.onmessage = e => {
+    const data = e.data;
+
+    // Add new line to log
+    lines.push(data);
+    if (lines.length > maxLines) lines.shift();
+
+    logDiv.innerHTML = '';
+    lines.forEach(line => {
+      const div = document.createElement('div');
+      div.className = 'line';
+      div.textContent = line;
+      logDiv.appendChild(div);
+    });
+    logDiv.scrollTop = logDiv.scrollHeight;
+
+    // Parse accelerometer and gyroscope values
+    const accMatch = data.match(/Acc\(m\/s2\):\s*([-\d., ]+)/);
+    const gyroMatch = data.match(/Gyro\(dps\):\s*([-\d., ]+)/);
+
+    if (accMatch) {
+      accelDiv.textContent = accMatch[1].trim();
+    }
+    if (gyroMatch) {
+      gyroDiv.textContent = gyroMatch[1].trim();
+    }
+  };
+
+  evtSource.onerror = e => {
+    const div = document.createElement('div');
+    div.style.color = 'red';
+    div.textContent = 'Connection lost.';
+    logDiv.appendChild(div);
+    evtSource.close();
+  };
+</script>
+</body>
+</html>
+
+    ''')
+
+@app.route('/stream')
+def stream():
+    def event_stream():
+        global latest_line
+        while True:
+            yield f"data: {latest_line}\n\n"
+            time.sleep(0.1)
+    return Response(event_stream(), mimetype="text/event-stream")
+
+if __name__ == '__main__':
+    thread = threading.Thread(target=read_serial, daemon=True)
+    thread.start()
+    app.run(debug=False, threaded=True)
