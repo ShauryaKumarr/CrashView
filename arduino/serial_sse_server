@@ -2,6 +2,8 @@ from flask import Flask, Response, render_template_string
 import serial
 import threading
 import time
+import json
+import re
 
 app = Flask(__name__)
 
@@ -10,6 +12,46 @@ BAUDRATE = 115200
 
 # Shared variable for latest line read from serial
 latest_line = ""
+parsed_data = {
+    "accel": {"x": 0, "y": 0, "z": 0},
+    "gyro": {"x": 0, "y": 0, "z": 0},
+    "ultrasound": 100,
+    "timestamp": ""
+}
+
+def parse_serial_data(line):
+    """Parse serial data and extract sensor values"""
+    global parsed_data
+    
+    # Extract accelerometer data
+    acc_match = re.search(r'Acc\(m/s2\):\s*([-\d., ]+)', line)
+    if acc_match:
+        acc_values = acc_match.group(1).strip().split(',')
+        if len(acc_values) >= 3:
+            parsed_data["accel"] = {
+                "x": float(acc_values[0]),
+                "y": float(acc_values[1]), 
+                "z": float(acc_values[2])
+            }
+    
+    # Extract gyroscope data
+    gyro_match = re.search(r'Gyro\(dps\):\s*([-\d., ]+)', line)
+    if gyro_match:
+        gyro_values = gyro_match.group(1).strip().split(',')
+        if len(gyro_values) >= 3:
+            parsed_data["gyro"] = {
+                "x": float(gyro_values[0]),
+                "y": float(gyro_values[1]),
+                "z": float(gyro_values[2])
+            }
+    
+    # Extract ultrasound data (if available)
+    ultra_match = re.search(r'Distance:\s*(\d+)', line)
+    if ultra_match:
+        parsed_data["ultrasound"] = int(ultra_match.group(1))
+    
+    parsed_data["timestamp"] = time.strftime("%H:%M:%S")
+    return parsed_data
 
 def read_serial():
     global latest_line
@@ -19,142 +61,1007 @@ def read_serial():
             line = ser.readline().decode('utf-8', errors='replace').strip()
             if line:
                 latest_line = line
+                parse_serial_data(line)
     except Exception as e:
         print("Serial error:", e)
 
 @app.route('/')
 def index():
-    # Simple webpage showing live serial data via SSE
     return render_template_string('''
-        <!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8" />
-<title>CrashView - Live Serial Data (SSE)</title>
-<style>
-  body {
-    background: #121212;
-    color: #ddd;
-    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-    margin: 0; padding: 1rem;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  h1 {
-    font-weight: 900;
-    font-size: 3rem;
-    color: #e94e77;
-    margin-bottom: 0.5rem;
-    user-select: none;
-  }
-  #container {
-    display: flex;
-    gap: 2rem;
-    width: 90vw;
-    max-width: 900px;
-  }
-  #log {
-    flex: 1;
-    background: #222;
-    border-radius: 8px;
-    padding: 1rem;
-    height: 300px;
-    overflow-y: auto;
-    font-family: monospace;
-    font-size: 1.1rem;
-    line-height: 1.3;
-    box-shadow: 0 0 10px #e94e77aa;
-  }
-  #log .line {
-    margin-bottom: 0.3rem;
-    white-space: pre-wrap;
-  }
-  .panel {
-    width: 250px;
-    background: #222;
-    border-radius: 8px;
-    padding: 1rem;
-    box-shadow: 0 0 10px #e94e77aa;
-  }
-  .panel h2 {
-    margin-top: 0;
-    color: #f48fb1;
-    font-weight: 700;
-    font-size: 1.4rem;
-    user-select: none;
-  }
-  .values {
-    font-family: monospace;
-    font-size: 1.2rem;
-    margin-top: 1rem;
-    white-space: pre-wrap;
-  }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CrashView - Real-Time Vehicle Monitor</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', 'Segoe UI', 'Roboto', Arial, sans-serif;
+            background: linear-gradient(135deg, #0f1419 0%, #1a1f2e 100%);
+            color: #f3f4f6;
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        .App {
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .App-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 1.5rem 2rem;
+            background: rgba(35, 39, 47, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
+            border-bottom: 1px solid rgba(127, 255, 212, 0.1);
+        }
+
+        .App-header h1 {
+            margin: 0;
+            font-size: 2.2rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #7fffd4 0%, #64ffda 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .connection-controls {
+            display: flex;
+            align-items: center;
+            gap: 1.5rem;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            background: rgba(15, 20, 25, 0.6);
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            border: 1px solid rgba(127, 255, 212, 0.2);
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.connected {
+            background: #10b981;
+            box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+        }
+
+        .status-dot.disconnected {
+            background: #ef4444;
+            box-shadow: 0 0 8px rgba(239, 68, 68, 0.5);
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .main-content {
+            display: flex;
+            flex: 1;
+            padding: 2rem;
+            gap: 2rem;
+            justify-content: space-between;
+        }
+
+        .panel {
+            background: rgba(35, 39, 47, 0.8);
+            backdrop-filter: blur(10px);
+            border-radius: 1.25rem;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+            border: 1px solid rgba(127, 255, 212, 0.1);
+            padding: 2rem;
+            flex: 1;
+            min-width: 220px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+        }
+
+        .panel h3 {
+            margin: 0 0 1.5rem 0;
+            font-size: 1.4rem;
+            font-weight: 600;
+            color: #7fffd4;
+        }
+
+        .sensor-section {
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background: rgba(15, 20, 25, 0.4);
+            border-radius: 0.75rem;
+            border: 1px solid rgba(127, 255, 212, 0.1);
+            width: 100%;
+        }
+
+        .sensor-section h4 {
+            margin: 0 0 1rem 0;
+            font-size: 1.1rem;
+            color: #7fffd4;
+            border-bottom: 1px solid rgba(127, 255, 212, 0.2);
+            padding-bottom: 0.5rem;
+        }
+
+        /* Vehicle Visualization */
+        .vehicle-visualization {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .viz-container {
+            perspective: 800px;
+            width: 300px;
+            height: 300px;
+            margin: auto;
+        }
+
+        .vehicle-model {
+            position: relative;
+            width: 120px;
+            height: 60px;
+            transform-style: preserve-3d;
+            transition: transform 0.1s linear;
+            margin: auto;
+        }
+
+        .car-body {
+            position: relative;
+            width: 120px;
+            height: 60px;
+            transform-style: preserve-3d;
+        }
+
+        .car-front, .car-back, .car-left, .car-right, .car-top, .car-bottom {
+            position: absolute;
+            background: linear-gradient(135deg, #7fffd4 0%, #64ffda 100%);
+            border: 2px solid #5ee6c1;
+        }
+
+        .car-front, .car-back {
+            width: 120px;
+            height: 60px;
+        }
+
+        .car-left, .car-right {
+            width: 60px;
+            height: 60px;
+        }
+
+        .car-top, .car-bottom {
+            width: 120px;
+            height: 60px;
+        }
+
+        .car-front { transform: translateZ(30px); }
+        .car-back { transform: rotateY(180deg) translateZ(30px); }
+        .car-left { transform: rotateY(-90deg) translateZ(60px); }
+        .car-right { transform: rotateY(90deg) translateZ(60px); }
+        .car-top { transform: rotateX(90deg) translateZ(30px); }
+        .car-bottom { transform: rotateX(-90deg) translateZ(30px); }
+
+        .wheel {
+            position: absolute;
+            width: 20px;
+            height: 20px;
+            background: #333;
+            border-radius: 50%;
+            border: 2px solid #666;
+        }
+
+        .front-left { transform: translate(-40px, -30px, 35px); }
+        .front-right { transform: translate(40px, -30px, 35px); }
+        .back-left { transform: translate(-40px, 30px, 35px); }
+        .back-right { transform: translate(40px, 30px, 35px); }
+
+        .orientation-data {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            margin-top: 1rem;
+            width: 100%;
+        }
+
+        .data-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            background: rgba(127, 255, 212, 0.1);
+            border-radius: 0.5rem;
+            border: 1px solid rgba(127, 255, 212, 0.2);
+        }
+
+        .data-item .value {
+            color: #7fffd4;
+            font-weight: 600;
+            font-family: 'Fira Code', monospace;
+        }
+
+        /* Accelerometer Visualizer */
+        .accel-visualizer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .accel-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .accel-sphere {
+            position: relative;
+            width: 150px;
+            height: 150px;
+            border: 2px solid rgba(127, 255, 212, 0.3);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 20, 25, 0.6);
+        }
+
+        .accel-vector {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            transition: all 0.2s ease;
+            box-shadow: 0 0 10px currentColor;
+        }
+
+        .magnitude-indicator {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
+        .magnitude-bar {
+            width: 200px;
+            height: 8px;
+            background: rgba(127, 255, 212, 0.2);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .magnitude-fill {
+            height: 100%;
+            transition: width 0.2s ease;
+            border-radius: 4px;
+        }
+
+        .magnitude-value {
+            font-size: 0.9rem;
+            color: #7fffd4;
+            font-weight: 600;
+        }
+
+        .accel-data {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
+        .crash-alert {
+            background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+            color: white;
+            padding: 0.75rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            text-align: center;
+            animation: pulse 1s infinite;
+        }
+
+        /* Ultrasound Visualizer */
+        .ultrasound-visualizer {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .radar-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .radar-circle {
+            position: relative;
+            width: 200px;
+            height: 200px;
+            border: 2px solid rgba(127, 255, 212, 0.3);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: rgba(15, 20, 25, 0.6);
+        }
+
+        .radar-ring {
+            position: absolute;
+            border: 1px solid rgba(127, 255, 212, 0.2);
+            border-radius: 50%;
+        }
+
+        .radar-ring.ring-1 {
+            width: 60px;
+            height: 60px;
+        }
+
+        .radar-ring.ring-2 {
+            width: 120px;
+            height: 120px;
+        }
+
+        .radar-ring.ring-3 {
+            width: 180px;
+            height: 180px;
+        }
+
+        .distance-indicator {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            transition: transform 0.2s ease;
+            box-shadow: 0 0 8px currentColor;
+        }
+
+        .radar-center {
+            width: 4px;
+            height: 4px;
+            background: #7fffd4;
+            border-radius: 50%;
+        }
+
+        .distance-display {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .distance-value {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #7fffd4;
+        }
+
+        .proximity-status {
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .proximity-zones {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+            width: 100%;
+        }
+
+        .zone {
+            padding: 0.5rem;
+            border-radius: 0.5rem;
+            font-size: 0.8rem;
+            text-align: center;
+        }
+
+        .safe-zone {
+            background: rgba(16, 185, 129, 0.2);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            color: #10b981;
+        }
+
+        .warning-zone {
+            background: rgba(245, 158, 11, 0.2);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+            color: #f59e0b;
+        }
+
+        .danger-zone {
+            background: rgba(239, 68, 68, 0.2);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            color: #ef4444;
+        }
+
+        /* Crash Summary */
+        .crash-summary {
+            margin-top: 2rem;
+            padding: 1rem;
+            background: rgba(15, 20, 25, 0.4);
+            border-radius: 0.75rem;
+            border: 1px solid rgba(127, 255, 212, 0.1);
+        }
+
+        .crash-summary h4 {
+            margin: 0 0 1rem 0;
+            font-size: 1.1rem;
+            color: #ef4444;
+        }
+
+        .crash-list {
+            max-height: 150px;
+            overflow-y: auto;
+        }
+
+        .no-events {
+            color: #9ca3af;
+            font-style: italic;
+            text-align: center;
+            padding: 1rem;
+        }
+
+        .crash-event {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0.5rem;
+            margin-bottom: 0.5rem;
+            background: rgba(239, 68, 68, 0.1);
+            border-radius: 0.5rem;
+            border-left: 3px solid #ef4444;
+            font-size: 0.9rem;
+        }
+
+        .event-time {
+            color: #9ca3af;
+            font-size: 0.8rem;
+        }
+
+        .event-type {
+            color: #ef4444;
+            font-weight: 600;
+        }
+
+        .event-magnitude {
+            color: #7fffd4;
+            font-weight: 600;
+        }
+
+        /* Log Panel */
+        .log-text {
+            background: rgba(15, 20, 25, 0.8);
+            border-radius: 0.75rem;
+            padding: 1.5rem;
+            margin-top: 1rem;
+            width: 100%;
+            min-height: 200px;
+            color: #f3f4f6;
+            font-size: 0.9rem;
+            overflow-y: auto;
+            border: 1px solid rgba(127, 255, 212, 0.1);
+            font-family: 'Fira Code', monospace;
+        }
+
+        .log-entry {
+            margin-bottom: 0.75rem;
+            padding: 0.5rem;
+            background: rgba(127, 255, 212, 0.05);
+            border-radius: 0.5rem;
+            border-left: 3px solid #7fffd4;
+        }
+
+        .log-entry.alert {
+            background: rgba(239, 68, 68, 0.1);
+            border-left-color: #ef4444;
+            color: #ef4444;
+        }
+
+        /* Footer */
+        .App-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 1.5rem 2rem;
+            background: rgba(35, 39, 47, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 -4px 16px rgba(0,0,0,0.2);
+            border-top: 1px solid rgba(127, 255, 212, 0.1);
+        }
+
+        .logging-status {
+            display: flex;
+            align-items: center;
+        }
+
+        .logging-indicator {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            background: rgba(15, 20, 25, 0.6);
+            padding: 0.5rem 1rem;
+            border-radius: 2rem;
+            border: 1px solid rgba(127, 255, 212, 0.2);
+        }
+
+        .logging-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+        }
+
+        .logging-dot.active {
+            background: #10b981;
+            animation: pulse 1.5s infinite;
+        }
+
+        .logging-dot.inactive {
+            background: #6b7280;
+        }
+
+        .footer-info {
+            font-size: 0.9rem;
+            color: #9ca3af;
+        }
+
+        /* Responsive */
+        @media (max-width: 1200px) {
+            .main-content {
+                flex-direction: column;
+                gap: 1rem;
+            }
+            
+            .panel {
+                min-width: auto;
+            }
+        }
+    </style>
 </head>
 <body>
-  <h1>CrashView</h1>
-  <div id="container">
-    <div id="log"></div>
-    <div class="panel">
-      <h2>Accelerometer (m/s²)</h2>
-      <div id="accel-values" class="values">Waiting for data...</div>
+    <div class="App">
+        <!-- Top Bar -->
+        <header class="App-header">
+            <h1>🚗 CrashView - Real-Time Vehicle Monitor</h1>
+            <div class="connection-controls">
+                <div class="status-indicator">
+                    <div class="status-dot" id="status-dot"></div>
+                    <span class="status-label" id="status-label">Connecting...</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Left Panel: Sensor Readings -->
+            <div class="panel sensor-panel">
+                <h3>📊 Live Sensor Data</h3>
+                
+                <!-- Accelerometer Section -->
+                <div class="sensor-section">
+                    <h4>🚀 Accelerometer</h4>
+                    <div class="accel-visualizer">
+                        <div class="accel-container">
+                            <div class="accel-sphere">
+                                <div class="accel-vector" id="accel-vector"></div>
+                            </div>
+                            
+                            <div class="magnitude-indicator">
+                                <div class="magnitude-bar">
+                                    <div class="magnitude-fill" id="magnitude-fill"></div>
+                                </div>
+                                <span class="magnitude-value" id="magnitude-value">0.0 m/s²</span>
+                            </div>
+                        </div>
+                        
+                        <div class="accel-data">
+                            <div class="data-item">
+                                <span>X:</span>
+                                <span class="value" id="accel-x">0.00 m/s²</span>
+                            </div>
+                            <div class="data-item">
+                                <span>Y:</span>
+                                <span class="value" id="accel-y">0.00 m/s²</span>
+                            </div>
+                            <div class="data-item">
+                                <span>Z:</span>
+                                <span class="value" id="accel-z">0.00 m/s²</span>
+                            </div>
+                        </div>
+                        
+                        <div class="crash-alert" id="crash-alert" style="display: none;">
+                            ⚠️ High Acceleration Detected
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Ultrasound Section -->
+                <div class="sensor-section">
+                    <h4>📡 Proximity Sensor</h4>
+                    <div class="ultrasound-visualizer">
+                        <div class="radar-container">
+                            <div class="radar-circle">
+                                <div class="radar-ring ring-1"></div>
+                                <div class="radar-ring ring-2"></div>
+                                <div class="radar-ring ring-3"></div>
+                                
+                                <div class="distance-indicator" id="distance-indicator"></div>
+                                
+                                <div class="radar-center"></div>
+                            </div>
+                            
+                            <div class="distance-display">
+                                <span class="distance-value" id="distance-value">--- cm</span>
+                                <span class="proximity-status" id="proximity-status">✅ SAFE</span>
+                            </div>
+                        </div>
+                        
+                        <div class="proximity-zones">
+                            <div class="zone safe-zone">
+                                <span>Safe Zone: >50cm</span>
+                            </div>
+                            <div class="zone warning-zone">
+                                <span>Warning: 20-50cm</span>
+                            </div>
+                            <div class="zone danger-zone">
+                                <span>Danger: <20cm</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center: Vehicle Visualization -->
+            <div class="panel viz-panel">
+                <h3>🚗 Vehicle Orientation</h3>
+                <div class="vehicle-visualization">
+                    <div class="viz-container">
+                        <div class="vehicle-model" id="vehicle-model">
+                            <div class="car-body">
+                                <div class="car-front"></div>
+                                <div class="car-back"></div>
+                                <div class="car-left"></div>
+                                <div class="car-right"></div>
+                                <div class="car-top"></div>
+                                <div class="car-bottom"></div>
+                            </div>
+                            
+                            <div class="wheel front-left"></div>
+                            <div class="wheel front-right"></div>
+                            <div class="wheel back-left"></div>
+                            <div class="wheel back-right"></div>
+                        </div>
+                    </div>
+                    
+                    <div class="orientation-data">
+                        <div class="data-item">
+                            <span>Roll (X):</span>
+                            <span class="value" id="gyro-x">0.0°</span>
+                        </div>
+                        <div class="data-item">
+                            <span>Pitch (Y):</span>
+                            <span class="value" id="gyro-y">0.0°</span>
+                        </div>
+                        <div class="data-item">
+                            <span>Yaw (Z):</span>
+                            <span class="value" id="gyro-z">0.0°</span>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Crash Events Summary -->
+                <div class="crash-summary">
+                    <h4>🚨 Crash Events (<span id="crash-count">0</span>)</h4>
+                    <div class="crash-list" id="crash-list">
+                        <div class="no-events">No crash events detected</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Panel: Event Log -->
+            <div class="panel log-panel">
+                <h3>📝 System Log</h3>
+                <div class="log-text" id="log-text">
+                    <div class="log-entry">System initialized</div>
+                    <div class="log-entry">Waiting for Arduino connection...</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Bar: Status and Controls -->
+        <footer class="App-footer">
+            <div class="logging-status">
+                <div class="logging-indicator">
+                    <div class="logging-dot" id="logging-dot"></div>
+                    <span id="logging-status">Auto-Logging: Ready</span>
+                </div>
+            </div>
+            <div class="footer-info">
+                <span id="last-event">Last event: None</span>
+            </div>
+        </footer>
     </div>
-    <div class="panel">
-      <h2>Gyroscope (dps)</h2>
-      <div id="gyro-values" class="values">Waiting for data...</div>
-    </div>
-  </div>
 
-<script>
-  const logDiv = document.getElementById('log');
-  const accelDiv = document.getElementById('accel-values');
-  const gyroDiv = document.getElementById('gyro-values');
+    <script>
+        // Global variables
+        let crashEvents = [];
+        let isConnected = false;
+        let lastUpdateTime = Date.now();
 
-  const maxLines = 20;
-  const lines = [];
+        // DOM elements
+        const statusDot = document.getElementById('status-dot');
+        const statusLabel = document.getElementById('status-label');
+        const loggingDot = document.getElementById('logging-dot');
+        const loggingStatus = document.getElementById('logging-status');
+        const lastEvent = document.getElementById('last-event');
+        const logText = document.getElementById('log-text');
+        const crashList = document.getElementById('crash-list');
+        const crashCount = document.getElementById('crash-count');
 
-  const evtSource = new EventSource('/stream');
+        // Vehicle model
+        const vehicleModel = document.getElementById('vehicle-model');
 
-  evtSource.onmessage = e => {
-    const data = e.data;
+        // Accelerometer elements
+        const accelVector = document.getElementById('accel-vector');
+        const magnitudeFill = document.getElementById('magnitude-fill');
+        const magnitudeValue = document.getElementById('magnitude-value');
+        const accelX = document.getElementById('accel-x');
+        const accelY = document.getElementById('accel-y');
+        const accelZ = document.getElementById('accel-z');
+        const crashAlert = document.getElementById('crash-alert');
 
-    // Add new line to log
-    lines.push(data);
-    if (lines.length > maxLines) lines.shift();
+        // Gyroscope elements
+        const gyroX = document.getElementById('gyro-x');
+        const gyroY = document.getElementById('gyro-y');
+        const gyroZ = document.getElementById('gyro-z');
 
-    logDiv.innerHTML = '';
-    lines.forEach(line => {
-      const div = document.createElement('div');
-      div.className = 'line';
-      div.textContent = line;
-      logDiv.appendChild(div);
-    });
-    logDiv.scrollTop = logDiv.scrollHeight;
+        // Ultrasound elements
+        const distanceIndicator = document.getElementById('distance-indicator');
+        const distanceValue = document.getElementById('distance-value');
+        const proximityStatus = document.getElementById('proximity-status');
 
-    // Parse accelerometer and gyroscope values
-    const accMatch = data.match(/Acc\(m\/s2\):\s*([-\d., ]+)/);
-    const gyroMatch = data.match(/Gyro\(dps\):\s*([-\d., ]+)/);
+        // Initialize SSE connection
+        const evtSource = new EventSource('/stream');
 
-    if (accMatch) {
-      accelDiv.textContent = accMatch[1].trim();
-    }
-    if (gyroMatch) {
-      gyroDiv.textContent = gyroMatch[1].trim();
-    }
-  };
+        evtSource.onopen = function() {
+            isConnected = true;
+            statusDot.className = 'status-dot connected';
+            statusLabel.textContent = 'Connected';
+            loggingDot.className = 'logging-dot active';
+            loggingStatus.textContent = 'Auto-Logging: Active';
+            addLogEntry('Arduino connected successfully');
+        };
 
-  evtSource.onerror = e => {
-    const div = document.createElement('div');
-    div.style.color = 'red';
-    div.textContent = 'Connection lost.';
-    logDiv.appendChild(div);
-    evtSource.close();
-  };
-</script>
+        evtSource.onmessage = function(e) {
+            const data = e.data;
+            lastUpdateTime = Date.now();
+            
+            // Parse sensor data
+            parseSensorData(data);
+            
+            // Update visualizations
+            updateVisualizations();
+            
+            // Check for crash events
+            checkCrashEvents();
+            
+            // Update log
+            addLogEntry(`Data received: ${new Date().toLocaleTimeString()}`);
+        };
+
+        evtSource.onerror = function(e) {
+            isConnected = false;
+            statusDot.className = 'status-dot disconnected';
+            statusLabel.textContent = 'Disconnected';
+            loggingDot.className = 'logging-dot inactive';
+            loggingStatus.textContent = 'Auto-Logging: Ready';
+            addLogEntry('Connection lost', true);
+        };
+
+        function parseSensorData(line) {
+            // Extract accelerometer data
+            const accMatch = line.match(/Acc\\(m\\/s2\\):\\s*([-\\d., ]+)/);
+            if (accMatch) {
+                const accValues = accMatch[1].trim().split(',').map(v => parseFloat(v));
+                if (accValues.length >= 3) {
+                    window.accelData = {
+                        x: accValues[0],
+                        y: accValues[1],
+                        z: accValues[2]
+                    };
+                }
+            }
+
+            // Extract gyroscope data
+            const gyroMatch = line.match(/Gyro\\(dps\\):\\s*([-\\d., ]+)/);
+            if (gyroMatch) {
+                const gyroValues = gyroMatch[1].trim().split(',').map(v => parseFloat(v));
+                if (gyroValues.length >= 3) {
+                    window.gyroData = {
+                        x: gyroValues[0],
+                        y: gyroValues[1],
+                        z: gyroValues[2]
+                    };
+                }
+            }
+
+            // Extract ultrasound data - improved parsing
+            const ultraMatch = line.match(/Dist\\(cm\\):\\s*(\\d+)/);
+            if (ultraMatch) {
+                const distance = parseInt(ultraMatch[1]);
+                if (!isNaN(distance) && distance > 0) {
+                    window.ultrasoundData = distance;
+                }
+            } else if (line.includes('Out of range')) {
+                window.ultrasoundData = 200; // Set to max range when out of range
+            }
+        }
+
+        function updateVisualizations() {
+            // Update accelerometer visualization
+            if (window.accelData) {
+                const { x, y, z } = window.accelData;
+                const magnitude = Math.sqrt(x*x + y*y + z*z);
+                
+                // Scale the 3D vector for better visualization (real accelerometer data is typically small)
+                const scale = 8; // Scale factor for better visibility
+                accelVector.style.transform = `translateX(${x * scale}px) translateY(${y * scale}px) translateZ(${z * scale}px)`;
+                accelVector.style.backgroundColor = magnitude > 15 ? '#ef4444' : '#7fffd4';
+                
+                // Update magnitude bar with more realistic scaling
+                const magnitudePercent = Math.min((magnitude / 25) * 100, 100); // Scale to 25 m/s² max
+                magnitudeFill.style.width = `${magnitudePercent}%`;
+                magnitudeFill.style.backgroundColor = magnitude > 15 ? '#ef4444' : '#7fffd4';
+                magnitudeValue.textContent = `${magnitude.toFixed(2)} m/s²`;
+                
+                // Update individual values
+                accelX.textContent = `${x.toFixed(2)} m/s²`;
+                accelY.textContent = `${y.toFixed(2)} m/s²`;
+                accelZ.textContent = `${z.toFixed(2)} m/s²`;
+                
+                // Show/hide crash alert
+                crashAlert.style.display = magnitude > 15 ? 'block' : 'none';
+            }
+
+            // Update gyroscope visualization
+            if (window.gyroData) {
+                const { x, y, z } = window.gyroData;
+                
+                // Scale gyroscope data for better visualization (real gyro data is typically small)
+                const scale = 0.3; // Scale factor for better visibility
+                vehicleModel.style.transform = `rotateX(${x * scale}deg) rotateY(${y * scale}deg) rotateZ(${z * scale}deg)`;
+                
+                // Update orientation data
+                gyroX.textContent = `${x.toFixed(1)}°`;
+                gyroY.textContent = `${y.toFixed(1)}°`;
+                gyroZ.textContent = `${z.toFixed(1)}°`;
+            }
+
+            // Update ultrasound visualization
+            if (window.ultrasoundData) {
+                const distance = window.ultrasoundData;
+                
+                // Scale the radar indicator for better visualization
+                const maxDistance = 200; // Max range in cm
+                const scaledDistance = Math.min(distance, maxDistance);
+                const radarScale = 80 / maxDistance; // Scale to fit in radar circle
+                
+                distanceIndicator.style.transform = `translateY(${-scaledDistance * radarScale}px)`;
+                
+                // Determine proximity level with more realistic thresholds
+                let proximityLevel, statusText, statusColor;
+                if (distance < 10) {
+                    proximityLevel = 'danger';
+                    statusText = '⚠️ DANGER';
+                    statusColor = '#ef4444';
+                } else if (distance < 30) {
+                    proximityLevel = 'warning';
+                    statusText = '⚠️ WARNING';
+                    statusColor = '#f59e0b';
+                } else {
+                    proximityLevel = 'safe';
+                    statusText = '✅ SAFE';
+                    statusColor = '#7fffd4';
+                }
+                
+                // Handle "Out of range" case
+                if (distance >= 200) {
+                    statusText = '📡 OUT OF RANGE';
+                    statusColor = '#6b7280';
+                }
+                
+                distanceIndicator.style.backgroundColor = statusColor;
+                distanceValue.textContent = distance >= 200 ? 'Out of range' : `${distance.toFixed(1)} cm`;
+                proximityStatus.textContent = statusText;
+            }
+        }
+
+        function checkCrashEvents() {
+            if (window.accelData) {
+                const { x, y, z } = window.accelData;
+                const magnitude = Math.sqrt(x*x + y*y + z*z);
+                
+                if (magnitude > 15) {
+                    const crashEvent = {
+                        timestamp: new Date().toISOString(),
+                        type: 'High Acceleration',
+                        magnitude: magnitude.toFixed(2),
+                        gyroData: window.gyroData || { x: 0, y: 0, z: 0 },
+                        accelData: { x, y, z },
+                        ultrasoundData: window.ultrasoundData || 100
+                    };
+                    
+                    crashEvents.unshift(crashEvent);
+                    if (crashEvents.length > 10) crashEvents.pop();
+                    
+                    updateCrashList();
+                    addLogEntry(`🚨 Crash event detected: ${magnitude.toFixed(2)} m/s²`, true);
+                    lastEvent.textContent = `Last event: ${crashEvent.type}`;
+                }
+            }
+        }
+
+        function updateCrashList() {
+            crashCount.textContent = crashEvents.length;
+            
+            if (crashEvents.length === 0) {
+                crashList.innerHTML = '<div class="no-events">No crash events detected</div>';
+            } else {
+                crashList.innerHTML = crashEvents.map(event => `
+                    <div class="crash-event">
+                        <span class="event-time">${new Date(event.timestamp).toLocaleTimeString()}</span>
+                        <span class="event-type">${event.type}</span>
+                        <span class="event-magnitude">${event.magnitude} m/s²</span>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function addLogEntry(message, isAlert = false) {
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${isAlert ? 'alert' : ''}`;
+            entry.textContent = message;
+            logText.appendChild(entry);
+            logText.scrollTop = logText.scrollHeight;
+            
+            // Keep only last 20 entries
+            const entries = logText.querySelectorAll('.log-entry');
+            if (entries.length > 20) {
+                entries[0].remove();
+            }
+        }
+
+        // Check connection status periodically
+        setInterval(() => {
+            if (Date.now() - lastUpdateTime > 5000) {
+                if (isConnected) {
+                    isConnected = false;
+                    statusDot.className = 'status-dot disconnected';
+                    statusLabel.textContent = 'Disconnected';
+                    loggingDot.className = 'logging-dot inactive';
+                    loggingStatus.textContent = 'Auto-Logging: Ready';
+                    addLogEntry('Connection timeout', true);
+                }
+            }
+        }, 1000);
+    </script>
 </body>
 </html>
-
     ''')
 
 @app.route('/stream')
@@ -169,4 +1076,4 @@ def stream():
 if __name__ == '__main__':
     thread = threading.Thread(target=read_serial, daemon=True)
     thread.start()
-    app.run(debug=False, threaded=True)
+    app.run(debug=False, threaded=True, host='0.0.0.0', port=8080)
