@@ -21,7 +21,9 @@ CrashView is an innovative vehicle crash detection system that utilizes real-tim
 
 ## Demo
 
-*[Video demonstration will be added here]*
+[![Watch the video](https://raw.githubusercontent.com/ShauryaKumarr/CrashView/main/CrashView_demo_thumbnail.png)](https://raw.githubusercontent.com/ShauryaKumarr/CrashView/main/demo_CrashView.mp4)
+
+
 
 ## Hardware Diagram
 
