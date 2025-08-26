@@ -2,7 +2,10 @@
 
 ## Overview
 
-CrashView is an innovative vehicle crash detection system that utilizes real-time sensor data to automatically detect and analyze vehicle crashes. The system combines gyroscope, accelerometer, and ultrasound sensor data with intelligent threshold-based algorithms to provide instant crash detection and analysis.
+Most electric vehicles (EVs) lack real‐time situational awareness tools that help drivers and engineers interpret motion and proximity risks while a vehicle is operating. CrashView is a lightweight, energy‐efficient edge device and companion UI that continuously fuses inertial
+(LSM6DSO IMU) and ultrasonic ranging (HC‐SR04) to surface instant vehicle status, alerts, and health metrics. The Arduino‐based edge controller performs on‐device filtering and thresholding (e.g., abnormal yaw‐rate spikes, impact‐like acceleration, unsafe proximity) and
+streams structured telemetry to a desktop dashboard for visualization. To conserve storage while retaining critical evidence, the system implements selective SD logging of short pre/post windows around flagged events. This work demonstrates how low‐cost hardware and efficient
+edge processing can provide actionable, real‐time insight for safer EV and robotic platforms.
 
 ## Authors
 
