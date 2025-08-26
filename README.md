@@ -27,7 +27,7 @@ CrashView is an innovative vehicle crash detection system that utilizes real-tim
 
 ## Hardware Diagram
 
-*[Arduino hardware diagram will be added here]*
+![Hardware Diagram](HardwareDiagram.png)
 
 ## System Architecture
 
